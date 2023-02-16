@@ -1,2 +1,2 @@
-Cervical: 0
-Lumbar: 1
+cervical: 0
+lumbar: 1

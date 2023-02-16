@@ -28,6 +28,7 @@ class Train():
         num_workers,
         device,
         use_tensorboard,
+        csp,
         ):
 
         self.ds_train = ds_train
@@ -40,6 +41,7 @@ class Train():
         self.momentum = momentum
         self.num_workers = num_workers
         self.use_tensorboard = use_tensorboard
+        self.csp = csp
 
         # Device
         if device is not None:
@@ -69,7 +71,7 @@ class Train():
 
 
         # Model
-        self.model = Darknet53(in_channels=3, num_classes=self.num_classes).to(self.device)
+        self.model = Darknet53(in_channels=3, num_classes=self.num_classes, csp=self.csp).to(self.device)
 
         # Optimizer
         if optimizer == 'SGD':

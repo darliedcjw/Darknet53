@@ -1,7 +1,22 @@
 import torch
 import torch.nn as nn
 
-config = [
+csp_darknet53 = [
+    (32, 3, 1),
+    ["S", 16, 512], #  FinalOut_Channel
+    (32, 3, 2),
+    ["B", 1],
+    (68, 3, 2),
+    ["B", 2],
+    (128, 3, 2),
+    ["B", 8],
+    (256, 3, 2),
+    ["B", 8],
+    (512, 3, 2),
+    ["B", 4],
+]
+
+darknet53 = [
     (32, 3, 1),
     (64, 3, 2),
     ["B", 1],
@@ -70,20 +85,52 @@ class ResidualBlock(nn.Module):
         return x
 
 
+class Split(nn.Module):
+    def __init__(self,
+        in_channels,
+        out_channels,
+        **kwargs):
+        super().__init__()
+        self.conv = CNNBlock(in_channels, out_channels,**kwargs)
+
+    def forward(self, x):
+        x_store, x = torch.tensor_split(x, 2, dim=1)
+        x_store = self.conv(x_store)
+        return x_store, x
+
+
+class Concat(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x_store, x):
+        x = torch.cat([x_store, x], dim=1)
+        return x
+
+
 class Darknet53(nn.Module):
     def __init__(self,
         in_channels=3,
-        num_classes=20):
+        num_classes=20,
+        csp=False):
         super().__init__()
 
         self.num_classes = num_classes
         self.in_channels = in_channels
+        self.csp = csp
+        
+        self.concat = Concat()
         self.final = nn.Sequential(
             nn.AdaptiveAvgPool2d((1,1)),
             nn.Flatten(), 
             nn.Linear(in_features=1024, out_features=2),
             nn.Softmax(dim=1),
             )
+
+        self.final_csp = nn.Sequential(
+
+        )
+
         self.layers = self._create_conv_layers()
 
 
@@ -91,42 +138,102 @@ class Darknet53(nn.Module):
         layers = nn.ModuleList()
         in_channels = self.in_channels
 
-        for module in config:
-            if isinstance(module, tuple):
-                out_channels, kernel_size, stride = module
-                layers.append(
-                    CNNBlock(
-                        in_channels,
-                        out_channels,
-                        kernel_size=kernel_size,
-                        stride=stride,
-                        padding = 1 if kernel_size == 3 else 0
+        if self.csp:
+            print("Loading CSPDarknet53!")
+            for module in csp_darknet53:
+                if isinstance(module, tuple):
+                    out_channels, kernel_size, stride = module
+                    layers.append(
+                        CNNBlock(
+                            in_channels,
+                            out_channels,
+                            kernel_size=kernel_size,
+                            stride=stride,
+                            padding = 1 if kernel_size == 3 else 0
+                        )
                     )
-                )
-                in_channels = out_channels
+                    in_channels = out_channels
 
-            elif isinstance(module, list):
-                num_repeats = module[1]
-                layers.append(
-                    ResidualBlock(
-                        in_channels,
-                        num_repeats=num_repeats
+                elif isinstance(module, list):
+                    if module[0] == "B":
+                        num_repeats = module[1]
+                        layers.append(
+                            ResidualBlock(
+                                in_channels,
+                                num_repeats=num_repeats
+                            )
+                        )
+                    elif module[0] == "S":
+                        in_channels, finalout_channels = module[1:]
+                        layers.append(
+                            Split(
+                                in_channels,
+                                finalout_channels,
+                                kernel_size=32,
+                                stride=32
+                            )
+                        )
+                        in_channels = in_channels
+
+        else:
+            print('Loading Darknet53')
+            for module in darknet53:
+                if isinstance(module, tuple):
+                    out_channels, kernel_size, stride = module
+                    layers.append(
+                        CNNBlock(
+                            in_channels,
+                            out_channels,
+                            kernel_size=kernel_size,
+                            stride=stride,
+                            padding = 1 if kernel_size == 3 else 0
+                        )
                     )
-                )
-            
+                    in_channels = out_channels
+
+                elif isinstance(module, list):
+                    if module[0] == "B":
+                        num_repeats = module[1]
+                        layers.append(
+                            ResidualBlock(
+                                in_channels,
+                                num_repeats=num_repeats
+                            )
+                        )
+                    elif module[0] == "S":
+                        in_channels, finalout_channels = module[1:]
+                        layers.append(
+                            Split(
+                                in_channels,
+                                finalout_channels,
+                                kernel_size=32,
+                                stride=32
+                            )
+                        )
+                        in_channels = in_channels
 
         return layers
 
 
     def forward(self, x):
-        for layer in self.layers:
-            x = layer(x)
+        if self.csp:
+            for layer in self.layers:
+                if isinstance(layer, Split):
+                    x_store, x = layer(x)
+                else:
+                    x = layer(x)
 
-        x = self.final(x)
+            x = self.final(self.concat(x_store, x))
+        else:
+            for layer in self.layers:
+                x = layer(x)
+
+            x = self.final( x)         
+        
         return x
 
 if __name__ == '__main__':
-    x = torch.randn(4,3,256,256) 
-    model = Darknet53()
+    x = torch.randn(4,3,256,256)
+    model = Darknet53(3, 2)
     x = model(x)
     print(x.shape)
