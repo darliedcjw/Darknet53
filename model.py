@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
 
-csp_darknet53 = [
+cspdn53_config = [
     (32, 3, 1),
-    ["S", 16, 512], #  FinalOut_Channel
+    ["D", 16, 512, 32, 32], #  Out Channel, Final Out Channel, Kernel Size, Strides
     (32, 3, 2),
     ["B", 1],
     (68, 3, 2),
@@ -14,9 +14,10 @@ csp_darknet53 = [
     ["B", 8],
     (512, 3, 2),
     ["B", 4],
-]
+] 
 
-darknet53 = [
+
+dn53_config = [
     (32, 3, 1),
     (64, 3, 2),
     ["B", 1],
@@ -85,13 +86,14 @@ class ResidualBlock(nn.Module):
         return x
 
 
-class Split(nn.Module):
+# Downsample
+class Downsample(nn.Module):
     def __init__(self,
-        in_channels,
-        out_channels,
+        channels,
+        final_channels,
         **kwargs):
         super().__init__()
-        self.conv = CNNBlock(in_channels, out_channels,**kwargs)
+        self.conv = CNNBlock(channels, final_channels,**kwargs)
 
     def forward(self, x):
         x_store, x = torch.tensor_split(x, 2, dim=1)
@@ -122,14 +124,11 @@ class Darknet53(nn.Module):
         self.concat = Concat()
         self.final = nn.Sequential(
             nn.AdaptiveAvgPool2d((1,1)),
-            nn.Flatten(), 
+            nn.Flatten(),
             nn.Linear(in_features=1024, out_features=2),
             nn.Softmax(dim=1),
             )
 
-        self.final_csp = nn.Sequential(
-
-        )
 
         self.layers = self._create_conv_layers()
 
@@ -140,7 +139,7 @@ class Darknet53(nn.Module):
 
         if self.csp:
             print("Loading CSPDarknet53!")
-            for module in csp_darknet53:
+            for module in cspdn53_config:
                 if isinstance(module, tuple):
                     out_channels, kernel_size, stride = module
                     layers.append(
@@ -163,21 +162,21 @@ class Darknet53(nn.Module):
                                 num_repeats=num_repeats
                             )
                         )
-                    elif module[0] == "S":
-                        in_channels, finalout_channels = module[1:]
+                    elif module[0] == "D":
+                        out_channels, final_channels, kernel_size, stride = module[1:]
                         layers.append(
-                            Split(
-                                in_channels,
-                                finalout_channels,
-                                kernel_size=32,
-                                stride=32
+                            Downsample(
+                                out_channels,
+                                final_channels,
+                                kernel_size=kernel_size,
+                                stride=stride
                             )
                         )
-                        in_channels = in_channels
+                        in_channels = out_channels
 
         else:
             print('Loading Darknet53')
-            for module in darknet53:
+            for module in dn53_config:
                 if isinstance(module, tuple):
                     out_channels, kernel_size, stride = module
                     layers.append(
@@ -200,17 +199,6 @@ class Darknet53(nn.Module):
                                 num_repeats=num_repeats
                             )
                         )
-                    elif module[0] == "S":
-                        in_channels, finalout_channels = module[1:]
-                        layers.append(
-                            Split(
-                                in_channels,
-                                finalout_channels,
-                                kernel_size=32,
-                                stride=32
-                            )
-                        )
-                        in_channels = in_channels
 
         return layers
 
@@ -218,7 +206,7 @@ class Darknet53(nn.Module):
     def forward(self, x):
         if self.csp:
             for layer in self.layers:
-                if isinstance(layer, Split):
+                if isinstance(layer, Downsample):
                     x_store, x = layer(x)
                 else:
                     x = layer(x)
@@ -234,6 +222,6 @@ class Darknet53(nn.Module):
 
 if __name__ == '__main__':
     x = torch.randn(4,3,256,256)
-    model = Darknet53(3, 2)
+    model = Darknet53(3, 2, csp=True)
     x = model(x)
     print(x.shape)
